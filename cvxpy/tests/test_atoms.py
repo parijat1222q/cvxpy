@@ -3127,6 +3127,47 @@ class TestAtoms(BaseTest):
             parameter.value = value
             self.assertAlmostEqual(atom.value, expected)
 
+    def test_matrix_frac_outside_positive_domain(self):
+        """An invertible P does not certify the positive-definite domain."""
+        rng = np.random.default_rng(413)
+        for eigenvalues in [[-1., -1.], [-3., -2., 1.], [0., 1.], [-2., 1.]]:
+            with self.subTest(eigenvalues=eigenvalues):
+                n = len(eigenvalues)
+                basis = rng.normal(size=(n, n))
+                unitary, _ = np.linalg.qr(basis)
+                # Keep singular cases exact rather than depending on roundoff in a rotation.
+                value = (unitary @ np.diag(eigenvalues) @ unitary.T
+                         if all(eigenvalues) else np.diag(eigenvalues))
+                parameter = cp.Parameter((n, n), symmetric=True)
+                parameter.value = value
+                variable = cp.Variable((n, n), symmetric=True)
+                variable.value = value
+                for P in [cp.Constant(value), parameter, variable]:
+                    with self.subTest(argument=type(P).__name__):
+                        self.assertEqual(cp.matrix_frac(np.eye(n), P).value, np.inf)
+                problem = cp.Problem(cp.Minimize(cp.matrix_frac(np.eye(n), cp.Constant(value))))
+                self.assertEqual(problem.solve(solver=cp.CLARABEL), np.inf)
+
+    def test_matrix_frac_positive_domain_scaling(self):
+        """Use a triangular factor, without forming the inverse."""
+        basis = np.array([[2., 1.], [0., 3.]])
+        X = np.array([[1., -2.], [0.5, 1.]])
+        for scale in [1e-150, 1., 1e150]:
+            with self.subTest(scale=scale):
+                P = scale * (basis @ basis.T)
+                expected = np.trace(X.T @ np.linalg.solve(P, X))
+                self.assertAlmostEqual(cp.matrix_frac(X, cp.Constant(P)).value / expected,
+                                       1., places=10)
+
+    def test_matrix_frac_parameter_domain_updates(self):
+        """A new parameter value must not reuse an earlier domain result."""
+        parameter = cp.Parameter((2, 2), symmetric=True)
+        atom = cp.matrix_frac(np.eye(2), parameter)
+        for value, expected in [(np.eye(2), 2.), (-np.eye(2), np.inf),
+                                (2 * np.eye(2), 1.)]:
+            parameter.value = value
+            self.assertAlmostEqual(atom.value, expected)
+
     def test_log_det_sign(self) -> None:
         """log_det can be negative, e.g. log(det(0.5*I)) < 0."""
         X = Variable((2, 2), symmetric=True)

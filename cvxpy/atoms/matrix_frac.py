@@ -17,6 +17,7 @@ limitations under the License.
 from functools import wraps
 
 import numpy as np
+import scipy.linalg as sla
 import scipy.sparse as sp
 from numpy import linalg as LA
 
@@ -36,14 +37,18 @@ class MatrixFrac(Atom):
     def numeric(self, values):
         """Returns tr X.T*P^-1*X.
         """
-        # TODO raise error if not invertible?
         X = values[0]
         P = values[1]
-        if self.args[0].is_complex():
-            product = np.conj(X).T.dot(LA.inv(P)).dot(X)
-        else:
-            product = X.T.dot(LA.inv(P)).dot(X)
-        return product.trace() if len(product.shape) == 2 else product
+        # take Hermitian part of the input.
+        symm = (P + np.conj(P.T)) / 2
+        # An invertible P alone does not certify the positive-definite domain.
+        try:
+            factor = LA.cholesky(symm)
+        except LA.LinAlgError:
+            return np.inf
+        # With P = L L^H, tr X^H P^-1 X is the squared norm of L^-1 X.
+        Z = sla.solve_triangular(factor, X, lower=True)
+        return np.sum(np.abs(Z) ** 2)
 
     def _domain(self) -> list[Constraint]:
         """Returns constraints describing the domain of the node.
